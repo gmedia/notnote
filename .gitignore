@@ -1,0 +1,36 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local data and exports
+exports/
+fixtures/real/
+*.dump
+*.sql.gz
+tmp/
+.cache/
+
+# Tooling
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Internal planning and agent state (never publish)
+.omo/
+.agent/
