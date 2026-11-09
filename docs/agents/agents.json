@@ -1,0 +1,8 @@
+{
+  "agents": [
+    { "id": "alpha-1", "area": "import", "active": true },
+    { "id": "beta-1", "area": "web", "active": true },
+    { "id": "gamma-1", "area": "data", "active": true },
+    { "id": "delta-1", "area": "platform", "active": true }
+  ]
+}

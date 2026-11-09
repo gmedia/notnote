@@ -3,6 +3,8 @@
 Collaborative workspace with pages and relational databases, designed for **high-fidelity migration from Notion**.
 
 > **Status:** Phase 0 (foundation). Not production-ready. The repository currently contains the monorepo skeleton, shared domain types, and the import-mapping contract. Application runtimes are added per phase.
+>
+> **License:** source-available, not open source. Public readability does not grant commercial use. See [`LICENSE`](LICENSE).
 
 ## Why
 
@@ -32,7 +34,9 @@ packages/
   sdk/          Public API client
 docs/
   adr/          Architecture decision records
+  agents/       Multi-agent coordination protocol
   runbooks/     Operational runbooks
+scripts/        Repository tooling, including the claim lease CLI
 tests/
   e2e/          Playwright suites
   load/         k6 suites
@@ -85,10 +89,21 @@ See [`docs/adr/`](docs/adr/README.md). Key decisions:
 
 Mobile apps, offline editing, AI writing/agents, timeline/calendar/gallery views, automations, public page publishing.
 
+## Working with agents
+
+Work is coordinated through GitHub Issues plus Git ref leases, not assignees. Each agent claims an issue before writing code:
+
+```bash
+node scripts/claims.mjs claim --issue 42 --agent alpha-1 \
+  --paths "packages/notion-import/**,apps/importer/**"
+```
+
+Read [`AGENTS.md`](AGENTS.md) before starting, and [`docs/agents/coordination.md`](docs/agents/coordination.md) for the protocol, label taxonomy, and recovery procedures.
+
 ## Security
 
 Report vulnerabilities through GitHub private security advisories. See [`SECURITY.md`](SECURITY.md). Never commit real Notion exports or customer data to this repository.
 
 ## License
 
-Proprietary. All rights reserved. See [`LICENSE`](LICENSE).
+Source-available. All rights reserved. Public readability does not grant commercial use. See [`LICENSE`](LICENSE).
