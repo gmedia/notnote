@@ -24,6 +24,7 @@ Format: context, decision, consequences. Status values: `Proposed`, `Accepted`, 
 
 - [ADR-001](0001-editor-tiptap.md)
 - [ADR-003](0003-yjs-source-of-truth.md)
+- [ADR-007](0007-hybrid-notion-import.md)
 - [ADR-008](0008-tenancy-rls.md)
 
 Remaining records are tracked in the internal build plan and will be added as implementation starts.
