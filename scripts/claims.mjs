@@ -30,7 +30,7 @@ function git(args, { input, allowFail = false } = {}) {
   }
 }
 
-function remote() {
+export function remote() {
   return process.env.CLAIM_REMOTE ?? 'origin';
 }
 
@@ -50,7 +50,7 @@ function gh(args) {
   }
 }
 
-function syncLabels(issue, add, remove) {
+export function syncLabels(issue, add, remove) {
   const repo = repoSlug();
   if (!repo) return false;
   const args = ['issue', 'edit', String(issue), '--repo', repo];
@@ -60,10 +60,10 @@ function syncLabels(issue, add, remove) {
 }
 
 /**
- * The lock compares patterns by their literal prefix before the first wildcard.
- * This is deliberately conservative: a broad pattern conflicts with everything
- * beneath it, and a false conflict is much cheaper than two agents writing the
- * same file.
+ * Conflict detection compares patterns by their literal prefix before the first
+ * wildcard. This is deliberately conservative: a broad pattern conflicts with
+ * everything beneath it, and a false conflict is far cheaper than two agents
+ * writing the same file.
  */
 export function scopeOf(pattern) {
   const normalized = String(pattern).trim().replace(/^\.\//, '');
@@ -88,13 +88,13 @@ function trackingRef(issue) {
   return `refs/remotes/${remote()}/claims/issue-${issue}`;
 }
 
-function fetchClaims() {
+export function fetchClaims() {
   git(['fetch', '--prune', remote(), `+${REF_ROOT}*:refs/remotes/${remote()}/claims/*`], {
     allowFail: true,
   });
 }
 
-function readClaim(issue) {
+export function readClaim(issue) {
   const raw = git(['show', `${trackingRef(issue)}:claim.json`], { allowFail: true });
   if (!raw) return null;
   try {
@@ -104,11 +104,11 @@ function readClaim(issue) {
   }
 }
 
-function claimSha(issue) {
+export function claimSha(issue) {
   return git(['rev-parse', trackingRef(issue)], { allowFail: true });
 }
 
-function listClaims() {
+export function listClaims() {
   fetchClaims();
   const refs = git(['for-each-ref', '--format=%(refname)', `refs/remotes/${remote()}/claims/`], {
     allowFail: true,
@@ -124,9 +124,17 @@ function listClaims() {
     .filter((entry) => entry.claim !== null);
 }
 
-function isExpired(claim, now = Date.now()) {
-  const until = Date.parse(claim.lease_until);
+export function isExpired(claim, now = Date.now()) {
+  const until = Date.parse(claim?.lease_until);
   return !Number.isFinite(until) || until <= now;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function leaseIso(minutes) {
+  return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
 function commitClaim(claim) {
@@ -147,29 +155,7 @@ function pushClaim(issue, claim, { expectSha } = {}) {
   return true;
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function leaseIso(minutes) {
-  return new Date(Date.now() + minutes * 60_000).toISOString();
-}
-
-function fail(message, details) {
-  process.stderr.write(`${message}\n`);
-  if (details) process.stderr.write(`${details}\n`);
-  process.exit(1);
-}
-
-function parsePaths(value) {
-  if (!value) return [];
-  return value
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-function activeConflicts(paths, excludeIssue) {
+export function activeConflicts(paths, { excludeIssue } = {}) {
   const conflicts = [];
   for (const { issue, claim } of listClaims()) {
     if (issue === excludeIssue) continue;
@@ -185,16 +171,17 @@ function activeConflicts(paths, excludeIssue) {
   return conflicts;
 }
 
-function cmdClaim(values) {
-  const issue = Number(values.issue);
-  const agent = values.agent;
-  const paths = parsePaths(values.paths);
-  const ttl = Number(values.ttl ?? DEFAULT_TTL_MINUTES);
-
-  if (!Number.isInteger(issue) || issue <= 0) fail('claim requires --issue <number>');
-  if (!agent) fail('claim requires --agent <id>');
-  if (paths.length === 0) fail('claim requires --paths <glob[,glob]>');
-  if (!Number.isFinite(ttl) || ttl <= 0) fail('--ttl must be a positive number of minutes');
+export function claimIssue({ issue, agent, paths, ttl = DEFAULT_TTL_MINUTES, branch = null }) {
+  if (!Number.isInteger(issue) || issue <= 0) {
+    return { ok: false, error: 'claim requires a positive issue number' };
+  }
+  if (!agent) return { ok: false, error: 'claim requires an agent id' };
+  if (!Array.isArray(paths) || paths.length === 0) {
+    return { ok: false, error: 'claim requires at least one write_set path' };
+  }
+  if (!Number.isFinite(ttl) || ttl <= 0) {
+    return { ok: false, error: 'ttl must be a positive number of minutes' };
+  }
 
   fetchClaims();
   const existing = readClaim(issue);
@@ -203,28 +190,42 @@ function cmdClaim(values) {
 
   if (existing) {
     if (!isExpired(existing)) {
-      fail(
-        `issue #${issue} is already claimed by ${existing.agent} until ${existing.lease_until}`,
-        'Choose another issue. Do not steal a live claim.',
-      );
+      if (existing.agent !== agent) {
+        return {
+          ok: false,
+          error: `issue #${issue} is held by ${existing.agent} until ${existing.lease_until}`,
+          hint: 'Choose another issue. Do not steal a live claim.',
+        };
+      }
+      const refreshed = {
+        ...existing,
+        heartbeat: nowIso(),
+        lease_until: leaseIso(ttl),
+        ttl_minutes: ttl,
+      };
+      if (!pushClaim(issue, refreshed, { expectSha: existingSha })) {
+        return { ok: false, error: 'claim refresh lost a race; re-read before retrying' };
+      }
+      syncLabels(issue, ['status:claimed'], ['status:ready']);
+      return { ok: true, claim: refreshed, refreshed: true };
     }
     expectSha = existingSha;
-    process.stderr.write(`taking over expired claim from ${existing.agent}\n`);
   }
 
-  const conflicts = activeConflicts(paths, issue);
+  const conflicts = activeConflicts(paths, { excludeIssue: issue });
   if (conflicts.length > 0) {
-    const lines = conflicts.map(
-      (c) => `  #${c.issue} (${c.agent}): ${c.mine} overlaps ${c.theirs}`,
-    );
-    fail('write_set overlaps an active claim:', lines.join('\n'));
+    return {
+      ok: false,
+      error: 'write_set overlaps an active claim',
+      conflicts,
+    };
   }
 
   const claim = {
     version: 1,
     issue,
     agent,
-    branch: values.branch ?? null,
+    branch: branch ?? null,
     write_set: paths,
     started_at: existing?.started_at ?? nowIso(),
     heartbeat: nowIso(),
@@ -233,80 +234,179 @@ function cmdClaim(values) {
   };
 
   if (!pushClaim(issue, claim, { expectSha })) {
-    fail(
-      `failed to claim issue #${issue}`,
-      'The ref already exists or was replaced. Re-run `claims.mjs list` and pick another issue.',
-    );
+    return {
+      ok: false,
+      error: `failed to claim issue #${issue}`,
+      hint: 'The ref already exists or was replaced. Re-read the claim list and pick another issue.',
+    };
   }
 
   syncLabels(issue, ['status:claimed'], ['status:ready']);
-  process.stdout.write(`${JSON.stringify(claim, null, 2)}\n`);
+  return { ok: true, claim, refreshed: false };
 }
 
-function cmdHeartbeat(values) {
-  const issue = Number(values.issue);
-  const agent = values.agent;
-  if (!Number.isInteger(issue) || issue <= 0) fail('heartbeat requires --issue <number>');
-  if (!agent) fail('heartbeat requires --agent <id>');
-
+export function renewLease({ issue, agent, ttl }) {
   fetchClaims();
   const current = readClaim(issue);
   const sha = claimSha(issue);
-  if (!current) fail(`no claim found for issue #${issue}`);
-  if (current.agent !== agent) fail(`issue #${issue} is held by ${current.agent}, not ${agent}`);
+  if (!current) return { ok: false, error: `no claim found for issue #${issue}` };
+  if (current.agent !== agent) {
+    return { ok: false, error: `issue #${issue} is held by ${current.agent}, not ${agent}` };
+  }
 
-  const ttl = Number(values.ttl ?? current.ttl_minutes ?? DEFAULT_TTL_MINUTES);
-  const next = { ...current, heartbeat: nowIso(), lease_until: leaseIso(ttl), ttl_minutes: ttl };
+  const effectiveTtl = ttl ?? current.ttl_minutes ?? DEFAULT_TTL_MINUTES;
+  const next = {
+    ...current,
+    heartbeat: nowIso(),
+    lease_until: leaseIso(effectiveTtl),
+    ttl_minutes: effectiveTtl,
+  };
 
   if (!pushClaim(issue, next, { expectSha: sha })) {
-    fail('heartbeat failed: the claim changed under you', 'Re-read the claim before retrying.');
+    return { ok: false, error: 'heartbeat failed: the claim changed under you' };
   }
-
-  process.stdout.write(`${JSON.stringify(next, null, 2)}\n`);
+  return { ok: true, claim: next };
 }
 
-function cmdRelease(values) {
-  const issue = Number(values.issue);
-  const agent = values.agent;
-  if (!Number.isInteger(issue) || issue <= 0) fail('release requires --issue <number>');
-
+export function releaseIssue({ issue, agent, requeue = false, force = false }) {
   fetchClaims();
   const current = readClaim(issue);
-  if (!current) {
-    process.stdout.write(`issue #${issue} has no claim\n`);
-    return;
-  }
-  if (current.agent !== agent && values.force !== true) {
-    fail(`issue #${issue} is held by ${current.agent}; pass --force to release it`);
+  if (!current) return { ok: true, released: false };
+  if (current.agent !== agent && force !== true) {
+    return {
+      ok: false,
+      error: `issue #${issue} is held by ${current.agent}; pass --force to release it`,
+    };
   }
 
   const result = git(['push', remote(), '--delete', remoteRef(issue)], { allowFail: true });
-  if (result === null) fail(`failed to delete claim for issue #${issue}`);
+  if (result === null) return { ok: false, error: `failed to delete claim for issue #${issue}` };
   fetchClaims();
 
-  if (values.requeue === true) {
+  if (requeue) {
     syncLabels(issue, ['status:ready'], ['status:claimed', 'status:in-review']);
   } else {
     syncLabels(issue, ['status:done'], ['status:claimed', 'status:in-review']);
   }
-  process.stdout.write(`released issue #${issue}\n`);
+  return { ok: true, released: true };
 }
 
-function cmdCheck(values) {
+export function collectGarbage({ grace = DEFAULT_GRACE_MINUTES, apply = false } = {}) {
+  const results = [];
+  const now = Date.now();
+
+  for (const { issue, claim } of listClaims()) {
+    const until = Date.parse(claim.lease_until);
+    if (Number.isFinite(until) && now < until + grace * 60_000) continue;
+
+    if (!apply) {
+      results.push({ issue, agent: claim.agent, expired: claim.lease_until, applied: false });
+      continue;
+    }
+
+    const sha = claimSha(issue);
+    const result = git(
+      [
+        'push',
+        remote(),
+        `--force-with-lease=${remoteRef(issue)}:${sha}`,
+        '--delete',
+        remoteRef(issue),
+      ],
+      { allowFail: true },
+    );
+    if (result !== null) syncLabels(issue, ['status:ready'], ['status:claimed']);
+    results.push({
+      issue,
+      agent: claim.agent,
+      expired: claim.lease_until,
+      applied: result !== null,
+    });
+  }
+
+  return results;
+}
+
+function parsePaths(value) {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function describeConflicts(conflicts) {
+  return conflicts
+    .map((c) => `  #${c.issue} (${c.agent}): ${c.mine} overlaps ${c.theirs}`)
+    .join('\n');
+}
+
+function runClaim(values) {
+  const result = claimIssue({
+    issue: Number(values.issue),
+    agent: values.agent,
+    paths: parsePaths(values.paths),
+    ttl: Number(values.ttl ?? DEFAULT_TTL_MINUTES),
+    branch: values.branch ?? null,
+  });
+
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`);
+    if (result.hint) process.stderr.write(`${result.hint}\n`);
+    if (result.conflicts) process.stderr.write(`${describeConflicts(result.conflicts)}\n`);
+    process.exit(1);
+  }
+
+  if (result.refreshed) process.stderr.write('claim already held by you; lease refreshed\n');
+  process.stdout.write(`${JSON.stringify(result.claim, null, 2)}\n`);
+}
+
+function runHeartbeat(values) {
+  const result = renewLease({
+    issue: Number(values.issue),
+    agent: values.agent,
+    ttl: values.ttl ? Number(values.ttl) : undefined,
+  });
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`${JSON.stringify(result.claim, null, 2)}\n`);
+}
+
+function runRelease(values) {
+  const result = releaseIssue({
+    issue: Number(values.issue),
+    agent: values.agent,
+    requeue: values.requeue === true,
+    force: values.force === true,
+  });
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(
+    result.released ? `released issue #${values.issue}\n` : `issue #${values.issue} has no claim\n`,
+  );
+}
+
+function runCheck(values) {
   const paths = parsePaths(values.paths);
-  if (paths.length === 0) fail('check requires --paths <glob[,glob]>');
-  const conflicts = activeConflicts(paths, Number(values.issue ?? 0) || undefined);
+  if (paths.length === 0) {
+    process.stderr.write('check requires --paths <glob[,glob]>\n');
+    process.exit(1);
+  }
+  const exclude = Number(values.issue ?? 0) || undefined;
+  const conflicts = activeConflicts(paths, { excludeIssue: exclude });
   if (conflicts.length === 0) {
     process.stdout.write('no conflicts\n');
     return;
   }
-  for (const c of conflicts) {
-    process.stdout.write(`#${c.issue} (${c.agent}): ${c.mine} overlaps ${c.theirs}\n`);
-  }
+  process.stdout.write(`${describeConflicts(conflicts)}\n`);
   process.exit(1);
 }
 
-function cmdList() {
+function runList() {
   const claims = listClaims().sort((a, b) => a.issue - b.issue);
   if (claims.length === 0) {
     process.stdout.write('no active claims\n');
@@ -320,46 +420,34 @@ function cmdList() {
   }
 }
 
-function cmdGc(values) {
-  const grace = Number(values.grace ?? DEFAULT_GRACE_MINUTES);
-  const apply = values.apply === true;
-  const now = Date.now();
-  let reclaimed = 0;
+function runGc(values) {
+  const results = collectGarbage({
+    grace: Number(values.grace ?? DEFAULT_GRACE_MINUTES),
+    apply: values.apply === true,
+  });
 
-  for (const { issue, claim } of listClaims()) {
-    const until = Date.parse(claim.lease_until);
-    if (Number.isFinite(until) && now < until + grace * 60_000) continue;
+  if (results.length === 0) {
+    process.stdout.write('nothing to reclaim\n');
+    return;
+  }
 
-    reclaimed += 1;
-    if (!apply) {
+  for (const entry of results) {
+    if (!entry.applied) {
       process.stdout.write(
-        `would reclaim #${issue} (${claim.agent}, expired ${claim.lease_until})\n`,
+        `would reclaim #${entry.issue} (${entry.agent}, expired ${entry.expired})\n`,
       );
       continue;
     }
-    const sha = claimSha(issue);
-    const result = git(
-      [
-        'push',
-        remote(),
-        `--force-with-lease=${remoteRef(issue)}:${sha}`,
-        '--delete',
-        remoteRef(issue),
-      ],
-      { allowFail: true },
-    );
-    process.stdout.write(
-      result === null ? `failed to reclaim #${issue}\n` : `reclaimed #${issue} (${claim.agent})\n`,
-    );
-    if (result !== null) syncLabels(issue, ['status:ready'], ['status:claimed']);
+    process.stdout.write(`reclaimed #${entry.issue} (${entry.agent})\n`);
   }
-
-  if (reclaimed === 0) process.stdout.write('nothing to reclaim\n');
 }
 
-function cmdVerify(values) {
+function runVerify(values) {
   const issue = Number(values.issue);
-  if (!Number.isInteger(issue) || issue <= 0) fail('verify requires --issue <number>');
+  if (!Number.isInteger(issue) || issue <= 0) {
+    process.stderr.write('verify requires --issue <number>\n');
+    process.exit(1);
+  }
 
   const files = values['files-file']
     ? readFileSync(values['files-file'], 'utf8')
@@ -370,9 +458,16 @@ function cmdVerify(values) {
 
   fetchClaims();
   const claim = readClaim(issue);
-  if (!claim)
-    fail(`no claim found for issue #${issue}`, 'Claim the issue before opening a pull request.');
-  if (isExpired(claim)) fail(`claim for issue #${issue} expired at ${claim.lease_until}`);
+  if (!claim) {
+    process.stderr.write(
+      `no claim found for issue #${issue}\nClaim the issue before opening a pull request.\n`,
+    );
+    process.exit(1);
+  }
+  if (isExpired(claim)) {
+    process.stderr.write(`claim for issue #${issue} expired at ${claim.lease_until}\n`);
+    process.exit(1);
+  }
 
   const allowed = claim.write_set ?? [];
   const violations = files.filter((file) => !allowed.some((pattern) => overlaps(file, pattern)));
@@ -410,30 +505,28 @@ if (invokedDirectly) {
     },
   });
 
-  const command = positionals[0];
-
   try {
-    switch (command) {
+    switch (positionals[0]) {
       case 'claim':
-        cmdClaim(values);
+        runClaim(values);
         break;
       case 'heartbeat':
-        cmdHeartbeat(values);
+        runHeartbeat(values);
         break;
       case 'release':
-        cmdRelease(values);
+        runRelease(values);
         break;
       case 'check':
-        cmdCheck(values);
+        runCheck(values);
         break;
       case 'list':
-        cmdList();
+        runList();
         break;
       case 'gc':
-        cmdGc(values);
+        runGc(values);
         break;
       case 'verify':
-        cmdVerify(values);
+        runVerify(values);
         break;
       default:
         process.stderr.write(
