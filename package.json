@@ -14,8 +14,10 @@
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:scripts": "node --test scripts/claims.test.mjs",
+    "test:scripts": "node --test scripts/*.test.mjs scripts/lib/*.test.mjs",
     "claims": "node scripts/claims.mjs",
+    "dispatch": "node scripts/dispatch.mjs",
+    "review": "node scripts/review.mjs",
     "clean": "turbo run clean && rm -rf node_modules .turbo"
   },
   "devDependencies": {

@@ -15,6 +15,8 @@ This repository is worked on by multiple automated agents in parallel. These rul
 3. Skip issues whose `write_set` overlaps an active claim.
 4. If nothing is available, stop. Do not invent work and do not start on `status:blocked` issues.
 
+When a dispatcher is running, an issue may already be claimed for you. In that case `claim` refreshes your own lease instead of failing. See [`docs/agents/dispatcher.md`](docs/agents/dispatcher.md).
+
 ## Claim before you code
 
 A claim is a Git ref, not an assignee field. Assignees and labels are advisory; the ref is the lock.
@@ -56,9 +58,21 @@ node scripts/claims.mjs claim --issue 42 --agent "$AGENT_ID" \
 
 - Title: `<type>(<scope>): <summary>`, for example `feat(importer): map synced blocks`.
 - Body must contain `Closes #42`.
-- All checks must pass: `Lint, typecheck, test, build`.
+- All checks must pass: `Lint, typecheck, test, build` and `Review gate`.
 - Do not merge your own pull request.
 - One pull request per issue. Unrelated fixes become a new issue.
+
+## Review
+
+Pull requests are reviewed by the `reviewer` agent, not by the author.
+
+```bash
+node scripts/review.mjs --pr 20 --comment
+```
+
+The reviewer posts one comment starting with `<!-- notnote-review -->` and applies `review:pass` or `review:changes`. The mechanical part is enforced by CI; the reviewer judges design, test quality, and honest scope.
+
+A `review:changes` verdict is a blocker. Fix the branch, push, and the gate re-runs. Do not argue with a mechanical finding; fix it or escalate with evidence.
 
 ## Hard rules
 
@@ -84,3 +98,5 @@ node scripts/claims.mjs claim --issue 42 --agent "$AGENT_ID" \
 ## Coordination reference
 
 See [`docs/agents/coordination.md`](docs/agents/coordination.md) for the claim protocol, label taxonomy, and recovery procedures.
+See [`docs/agents/dispatcher.md`](docs/agents/dispatcher.md) for assignment policy.
+Agent definitions live in [`.opencode/agent/worker.md`](.opencode/agent/worker.md) and [`.opencode/agent/reviewer.md`](.opencode/agent/reviewer.md).
