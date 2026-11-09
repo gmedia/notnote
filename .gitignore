@@ -34,3 +34,6 @@ tmp/
 # Internal planning and agent state (never publish)
 .omo/
 .agent/
+
+# Local agent host map (contains internal hostnames)
+agents.local.json
