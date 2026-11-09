@@ -57,14 +57,19 @@ export function scanAdded({ path, lines }) {
 }
 
 const SOURCE = /^(.+?)\/(?:src|app|lib)\//;
-const TEST = /(?:^|\/)(?:test|tests|__tests__)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const TEST_DIR = /(?:^|\/)(?:test|tests|__tests__)\//;
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
+export function isTestPath(path) {
+  return TEST_DIR.test(path) || TEST_FILE.test(path);
+}
 
 export function hasTestCoverage(files) {
   const sources = new Set();
   let touchedTests = false;
 
   for (const file of files) {
-    if (TEST.test(file.path)) touchedTests = true;
+    if (isTestPath(file.path)) touchedTests = true;
     const match = file.path.match(SOURCE);
     if (match) sources.add(match[1]);
   }

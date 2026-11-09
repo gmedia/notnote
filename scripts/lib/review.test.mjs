@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { evaluate, hasTestCoverage, isScannablePath, scanAdded } from './review.mjs';
+import { evaluate, hasTestCoverage, isScannablePath, isTestPath, scanAdded } from './review.mjs';
 
 const issue = (overrides = {}) => ({
   number: 8,
@@ -70,6 +70,21 @@ describe('isScannablePath', () => {
 
   it('excludes markdown', () => {
     assert.equal(isScannablePath('AGENTS.md'), false);
+  });
+});
+
+describe('isTestPath', () => {
+  it('recognises a test directory', () => {
+    assert.equal(isTestPath('packages/x/test/a.ts'), true);
+  });
+
+  it('recognises a test file suffix', () => {
+    assert.equal(isTestPath('packages/x/src/a.test.ts'), true);
+    assert.equal(isTestPath('scripts/lib/review.test.mjs'), true);
+  });
+
+  it('does not treat source as a test', () => {
+    assert.equal(isTestPath('packages/x/src/testing.ts'), false);
   });
 });
 
