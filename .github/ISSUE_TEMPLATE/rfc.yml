@@ -1,0 +1,67 @@
+name: RFC
+description: A decision that changes a shared contract, schema, permission model, or license.
+title: '[rfc] '
+labels: ['type:rfc', 'risk:critical']
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What forces a decision now.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The concrete change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives rejected
+      value: |
+        -
+    validations:
+      required: true
+
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What becomes harder, slower, or irreversible.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contracts
+    attributes:
+      label: Affected contracts
+      options:
+        - label: packages/shared
+        - label: Database schema
+        - label: Permission model
+        - label: Import fidelity targets
+        - label: License or dependency policy
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration and rollback
+      description: How existing data and running deployments move, and how to undo it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: write_set
+    attributes:
+      label: write_set
+      value: |
+        ```
+        docs/adr/**
+        ```
+    validations:
+      required: true

@@ -1,10 +1,10 @@
-# Default owner until the team structure is finalized.
+# Default owner until the agent accounts are registered.
 * @oppytut
 
-# Critical paths require an architect review.
 /packages/permissions/   @oppytut
 /packages/db-engine/     @oppytut
 /packages/notion-import/ @oppytut
 /apps/collab/            @oppytut
 /infra/                  @oppytut
+/scripts/                @oppytut
 /.github/                @oppytut

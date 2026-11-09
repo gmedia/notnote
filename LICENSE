@@ -1,18 +1,41 @@
+NotNote Source-Available License
+
 Copyright (c) 2026 gmedia. All rights reserved.
 
-This software and its associated documentation, source code, schemas, and
-design files (the "Software") are proprietary and confidential.
+This repository is publicly readable so that customers, auditors, and
+contributors can inspect how the product works. Public availability is not an
+open-source grant.
 
-No part of the Software may be copied, reproduced, modified, merged,
-published, distributed, sublicensed, sold, or used to create derivative
-works without prior written permission from the copyright holder.
+1. Permitted
 
-Access to the Software does not grant any license, express or implied, other
-than the limited right to use it for evaluation and development activities
-authorized in writing by the copyright holder.
+   You may view, clone, and fork this repository, and run it locally for
+   evaluation, testing, and non-commercial development.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING
-FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+2. Not permitted without written permission
+
+   - Commercial use, including internal business use beyond evaluation.
+   - Offering the software, or a derivative of it, as a hosted or managed
+     service.
+   - Redistribution, sublicensing, or selling the software or derivatives.
+   - Removing or altering this license, copyright notices, or attribution.
+
+3. Contributions
+
+   Contributions are accepted only under a signed Contributor License
+   Agreement. Do not open a pull request containing code you cannot license to
+   the copyright holder.
+
+4. Third-party components
+
+   Third-party dependencies remain under their own licenses. See the license
+   matrix in `docs/` and the SBOM generated in CI.
+
+5. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+For commercial licensing, contact the copyright holder.

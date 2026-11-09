@@ -1,0 +1,54 @@
+name: Issue guard
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate task shape
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check required sections
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map((label) => label.name);
+            const body = issue.body || '';
+            const wantsReady = labels.includes('status:ready');
+            const isTask = labels.some((label) => ['type:feat', 'type:fix', 'type:chore'].includes(label));
+            if (!wantsReady || !isTask) return;
+
+            const heading = '(?:#{2,4}\\s*)';
+            const missing = [];
+            if (!new RegExp(`${heading}write_set`, 'i').test(body)) missing.push('write_set');
+            if (!new RegExp(`${heading}acceptance criteria`, 'i').test(body))
+              missing.push('Acceptance criteria');
+            if (!new RegExp(`${heading}goal`, 'i').test(body)) missing.push('Goal');
+
+            const writeSetBlock = body.split(new RegExp(`${heading}write_set`, 'i'))[1] || '';
+            const hasPaths = /[\w./*-]+\/\*\*|[\w./-]+\.(ts|tsx|js|mjs|json|yml|yaml|md|sql)/.test(writeSetBlock);
+
+            if (missing.length > 0 || !hasPaths) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: 'status:ready',
+              }).catch(() => {});
+              const problems = [];
+              if (missing.length > 0) problems.push(`missing sections: ${missing.join(', ')}`);
+              if (!hasPaths) problems.push('write_set has no path globs');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Cannot mark this ready: ${problems.join('; ')}.\n\nAdd the missing sections, then apply \`status:ready\` again.`,
+              });
+            }

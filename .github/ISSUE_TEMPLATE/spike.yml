@@ -1,0 +1,57 @@
+name: Spike
+description: Time-boxed investigation that produces evidence, not production code.
+title: '[spike] '
+labels: ['type:spike']
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: The specific decision this spike unblocks.
+    validations:
+      required: true
+
+  - type: input
+    id: timebox
+    attributes:
+      label: Timebox
+      description: Maximum duration. Spikes do not extend silently.
+      placeholder: 3 days
+    validations:
+      required: true
+
+  - type: textarea
+    id: method
+    attributes:
+      label: Method
+      value: |
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence required
+      description: Numbers, reproduction steps, or a prototype branch. Opinions are not evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: write_set
+    attributes:
+      label: write_set
+      value: |
+        ```
+        docs/spikes/**
+        ```
+    validations:
+      required: true
+
+  - type: input
+    id: depends_on
+    attributes:
+      label: Depends on
+      placeholder: None
+    validations:
+      required: true

@@ -1,0 +1,73 @@
+name: Claim check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: claim-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify write_set
+    if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Fetch claims and base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "+refs/claims/*:refs/remotes/origin/claims/*"
+          git fetch origin "$BASE_REF"
+
+      - name: Resolve issue and changed files
+        id: resolve
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          issue=$(printf '%s' "$PR_BODY" | grep -oiE '(closes|fixes|resolves)[[:space:]]+#[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+          if [ -z "$issue" ]; then
+            issue=$(printf '%s' "$HEAD_REF" | sed -nE 's#^agent/[^/]+/([0-9]+)-.*#\1#p')
+          fi
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+          git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
+          echo "changed=$(wc -l < /tmp/changed.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip non-agent branches without a claim
+        if: steps.resolve.outputs.issue == ''
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          case "$HEAD_REF" in
+            agent/*)
+              echo "agent branch without a linked issue; add 'Closes #<n>' to the pull request body"
+              exit 1
+              ;;
+            *)
+              echo "not an agent branch and no linked issue; skipping claim verification"
+              ;;
+          esac
+
+      - name: Verify changed files
+        if: steps.resolve.outputs.issue != ''
+        env:
+          ISSUE: ${{ steps.resolve.outputs.issue }}
+        run: node scripts/claims.mjs verify --issue "$ISSUE" --files-file /tmp/changed.txt
