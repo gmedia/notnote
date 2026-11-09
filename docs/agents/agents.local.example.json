@@ -1,0 +1,26 @@
+{
+  "repo": "gmedia/notnote",
+  "login": "your-github-login",
+  "agents": [
+    {
+      "id": "alpha-1",
+      "host": "local",
+      "tokenClass": "fine-grained"
+    },
+    {
+      "id": "beta-1",
+      "host": "user@host-b",
+      "tokenClass": "fine-grained"
+    },
+    {
+      "id": "gamma-1",
+      "host": "user@host-c",
+      "tokenClass": "fine-grained"
+    },
+    {
+      "id": "delta-1",
+      "host": "user@host-d",
+      "tokenClass": "fine-grained"
+    }
+  ]
+}
