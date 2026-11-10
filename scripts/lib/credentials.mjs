@@ -4,6 +4,28 @@ export const TOKEN_CLASSES = {
   github_pat_: 'fine-grained',
 };
 
+/** Scopes that grant power far beyond this repository. */
+export const DANGEROUS_SCOPES = new Map([
+  ['admin:enterprise', 'enterprise-wide administration'],
+  ['admin:org', 'organisation membership and settings'],
+  ['admin:org_hook', 'organisation webhooks'],
+  ['admin:gpg_key', 'GPG keys on the account'],
+  ['admin:ssh_signing_key', 'SSH signing keys on the account'],
+  ['admin:repo_hook', 'webhooks on every accessible repository'],
+  ['delete:packages', 'package deletion'],
+  ['write:packages', 'package publication'],
+  ['audit_log', 'organisation audit log'],
+  ['write:network_configurations', 'network configuration'],
+]);
+
+export const ACCOUNT_TAKEOVER_SCOPES = new Map([
+  [
+    'admin:public_key',
+    'can add an SSH key to the account, which grants push to every reachable repository',
+  ],
+  ['admin:ssh_signing_key', 'can add a signing key to the account'],
+]);
+
 export function tokenClass(prefix) {
   if (typeof prefix !== 'string') return 'unknown';
   for (const [needle, name] of Object.entries(TOKEN_CLASSES)) {
@@ -30,22 +52,17 @@ function toStatus(value) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
-export const CAPABILITY_KEYS = [
-  'metadataRead',
-  'contentsWrite',
-  'issuesWrite',
-  'pullsWrite',
-  'actionsRead',
-  'adminRead',
-];
-
-const FIELD_TO_KEY = {
-  cap_metadata_read: 'metadataRead',
+const CAPABILITY_FIELDS = {
+  cap_traffic_read: 'pushRead',
+  cap_traffic_read_anon: 'pushReadAnon',
+  cap_actions_read: 'actionsRead',
+  cap_actions_read_anon: 'actionsReadAnon',
   cap_contents_write: 'contentsWrite',
+  cap_contents_write_anon: 'contentsWriteAnon',
   cap_issues_write: 'issuesWrite',
   cap_pulls_write: 'pullsWrite',
-  cap_actions_read: 'actionsRead',
   cap_admin_read: 'adminRead',
+  cap_ssh_key_write: 'sshKeyWrite',
 };
 
 export function parseProbe(stdout) {
@@ -57,7 +74,7 @@ export function parseProbe(stdout) {
   }
 
   const capabilities = {};
-  for (const [field, key] of Object.entries(FIELD_TO_KEY)) {
+  for (const [field, key] of Object.entries(CAPABILITY_FIELDS)) {
     capabilities[key] = toStatus(fields[field]);
   }
 
@@ -75,7 +92,7 @@ export function parseProbe(stdout) {
 }
 
 /**
- * A write probe sends a deliberately invalid payload, so an authorized token
+ * A write probe sends a deliberately invalid payload, so an authorised token
  * receives a validation error instead of creating anything. 403 is the only
  * status that means "this token lacks the permission".
  */
@@ -85,6 +102,15 @@ export function writeAllowed(status) {
 
 export function readAllowed(status) {
   return status === 200;
+}
+
+/**
+ * A read that succeeds anonymously proves nothing about the token. If the
+ * anonymous baseline matches, the probe is inconclusive rather than a pass.
+ */
+export function readVerdict(tokenStatus, anonStatus) {
+  if (anonStatus !== 0 && anonStatus === tokenStatus) return 'inconclusive';
+  return readAllowed(tokenStatus) ? 'pass' : 'fail';
 }
 
 export function findSharedKeys(probes) {
@@ -103,13 +129,6 @@ export function findSharedKeys(probes) {
   }
   return shared;
 }
-
-const PRIVILEGE_SCOPES = new Set([
-  'admin:public_key',
-  'admin:org',
-  'delete_repo',
-  'admin:repo_hook',
-]);
 
 export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
   const findings = [];
@@ -133,11 +152,18 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
     });
   }
 
-  if (!readAllowed(caps.metadataRead)) {
+  const pushRead = readVerdict(caps.pushRead, caps.pushReadAnon);
+  if (pushRead === 'fail') {
     findings.push({
       level: 'blocker',
-      rule: 'metadata-read',
-      message: `cannot read repository metadata (status ${caps.metadataRead})`,
+      rule: 'repo-push',
+      message: `cannot read repository traffic (status ${caps.pushRead}); token likely lacks push access`,
+    });
+  } else if (pushRead === 'inconclusive') {
+    findings.push({
+      level: 'inconclusive',
+      rule: 'repo-push',
+      message: 'traffic endpoint answered identically without a token; result proves nothing',
     });
   }
 
@@ -165,6 +191,17 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
     });
   }
 
+  if (readAllowed(caps.actionsRead)) {
+    const verdict = readVerdict(caps.actionsRead, caps.actionsReadAnon);
+    if (verdict === 'inconclusive') {
+      findings.push({
+        level: 'inconclusive',
+        rule: 'actions-read',
+        message: 'workflow listing is public in this repository; result proves nothing',
+      });
+    }
+  }
+
   if (readAllowed(caps.adminRead)) {
     findings.push({
       level: 'warning',
@@ -173,12 +210,27 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
     });
   }
 
-  const dangerous = probe.scopes.filter((scope) => PRIVILEGE_SCOPES.has(scope));
+  if (writeAllowed(caps.sshKeyWrite)) {
+    findings.push({
+      level: 'blocker',
+      rule: 'ssh-key-write',
+      message:
+        'token can add an SSH key to the account; this is account takeover, not repository access',
+    });
+  }
+
+  for (const [scope, reason] of ACCOUNT_TAKEOVER_SCOPES) {
+    if (probe.scopes.includes(scope)) {
+      findings.push({ level: 'blocker', rule: `scope:${scope}`, message: reason });
+    }
+  }
+
+  const dangerous = probe.scopes.filter((scope) => DANGEROUS_SCOPES.has(scope));
   if (dangerous.length > 0) {
     findings.push({
       level: 'warning',
       rule: 'broad-scope',
-      message: `token carries ${dangerous.join(', ')}`,
+      message: dangerous.map((scope) => `${scope} (${DANGEROUS_SCOPES.get(scope)})`).join('; '),
     });
   }
 
@@ -218,10 +270,11 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
   }
 
   const blocked = findings.some((finding) => finding.level === 'blocker');
+  const warned = findings.some((finding) => finding.level === 'warning');
   return {
     agent,
     host: probe.host,
-    status: blocked ? 'fail' : findings.length > 0 ? 'warn' : 'pass',
+    status: blocked ? 'fail' : warned ? 'warn' : 'pass',
     findings,
   };
 }
@@ -234,6 +287,8 @@ export function summarize(results) {
   };
 }
 
+const MARKERS = { blocker: '✗', warning: '!', inconclusive: '?' };
+
 export function renderTable(results) {
   const lines = [];
   for (const result of results) {
@@ -241,9 +296,7 @@ export function renderTable(results) {
       `${result.agent.padEnd(10)} ${result.host.padEnd(24)} ${result.status.toUpperCase()}`,
     );
     for (const finding of result.findings) {
-      lines.push(
-        `  ${finding.level === 'blocker' ? '✗' : '!'} ${finding.rule}: ${finding.message}`,
-      );
+      lines.push(`  ${MARKERS[finding.level] ?? '-'} ${finding.rule}: ${finding.message}`);
     }
   }
   const counts = summarize(results);

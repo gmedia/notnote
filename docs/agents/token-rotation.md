@@ -130,20 +130,52 @@ node scripts/verify-tokens.mjs --map agents.local.json
 
 The verifier reports, per agent:
 
-| Signal                | Severity | Meaning                                                                        |
-| --------------------- | -------- | ------------------------------------------------------------------------------ |
-| `token-class`         | blocker  | Token is OAuth or classic instead of fine-grained                              |
-| `no-credential`       | blocker  | No token found on the host                                                     |
-| `metadata-read`       | blocker  | Token cannot read the repository at all                                        |
-| `contents-write`      | blocker  | Token cannot write contents; HTTPS push, branch deletion, and API commits fail |
-| `issues-write`        | blocker  | Token cannot claim, label, or comment                                          |
-| `pulls-write`         | blocker  | Token cannot open or update pull requests                                      |
-| `identity`            | blocker  | Authenticated as the wrong account                                             |
-| `shell-history`       | blocker  | Credential-like string found in shell history                                  |
-| `administration`      | warning  | Token can read repository administration                                       |
-| `broad-scope`         | warning  | Token carries `admin:*`, `delete_repo`, or similar                             |
-| `shared-ssh-key`      | warning  | The same SSH key is present on more than one host                              |
-| `transcript-exposure` | warning  | Credential-like string found in session transcripts                            |
+| Signal                        | Severity     | Meaning                                                                        |
+| ----------------------------- | ------------ | ------------------------------------------------------------------------------ |
+| `token-class`                 | blocker      | Token is OAuth or classic instead of fine-grained                              |
+| `no-credential`               | blocker      | No token found on the host                                                     |
+| `repo-push`                   | blocker      | Token cannot read repository traffic, which requires push                      |
+| `contents-write`              | blocker      | Token cannot write contents; HTTPS push, branch deletion, and API commits fail |
+| `issues-write`                | blocker      | Token cannot claim, label, or comment                                          |
+| `pulls-write`                 | blocker      | Token cannot open or update pull requests                                      |
+| `ssh-key-write`               | blocker      | Token can add an SSH key to the account; account takeover                      |
+| `scope:admin:public_key`      | blocker      | Scope lets the token add an SSH key to the account                             |
+| `scope:admin:ssh_signing_key` | blocker      | Scope lets the token add a signing key to the account                          |
+| `identity`                    | blocker      | Authenticated as the wrong account                                             |
+| `shell-history`               | blocker      | Credential-like string found in shell history                                  |
+| `administration`              | warning      | Token can read repository administration                                       |
+| `broad-scope`                 | warning      | Token carries enterprise, organisation, or package scopes                      |
+| `shared-ssh-key`              | warning      | The same SSH key is present on more than one host                              |
+| `transcript-exposure`         | warning      | Credential-like string found in session transcripts                            |
+| `actions-read`                | inconclusive | Workflow listing is public here, so a 200 proves nothing                       |
+
+## A public repository breaks naive probes
+
+This repository is public. `GET /repos/{repo}` and `GET /repos/{repo}/actions/workflows` return `200` **without any token**, so a token with zero permissions still appears to pass a read check.
+
+The verifier therefore sends every read probe twice, once with the token and once anonymously. If both return the same status the result is reported as `inconclusive`, not `pass`. Push capability is measured on `GET /repos/{repo}/traffic/views` instead, because traffic is never public: anonymous gets `401`, a token without push gets `403`, and a token with push gets `200`.
+
+Do not add a read probe on a public endpoint as a health check. It cannot fail.
+
+## A classic token cannot be scoped, and that is the problem
+
+`ghp_` tokens have no repository scope. The only choice is "every repository the account can reach" or nothing. Trimming the permission list lowers some risk but cannot confine the token to this repository.
+
+A classic token with the default broad selection carries scopes that are irrelevant to agent work and dangerous if the token leaks:
+
+| Scope                               | Capability                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------ |
+| `admin:public_key`                  | Add an SSH key to the account, which grants push to every reachable repository |
+| `admin:ssh_signing_key`             | Add a signing key to the account                                               |
+| `admin:org`                         | Change organisation membership and settings                                    |
+| `admin:enterprise`                  | Change enterprise settings                                                     |
+| `admin:org_hook`, `admin:repo_hook` | Create webhooks that exfiltrate events                                         |
+| `delete:packages`, `write:packages` | Delete or publish packages                                                     |
+| `audit_log`                         | Read the organisation audit log                                                |
+
+The verifier proves this rather than assuming it: it sends `POST /user/keys` with an invalid key. A `422` means the token is authorised to add a key, and the check reports `ssh-key-write` as a blocker. The invalid payload cannot create anything, so the account key count is unchanged.
+
+Measured on a token of this shape: 56 repositories reachable, 2 account keys readable, and `POST /user/keys` authorised. That is account takeover material, not repository access.
 
 `--gate` exits non-zero on any warning or blocker, for use in CI or a pre-flight check. `--json` emits machine-readable output.
 
