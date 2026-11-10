@@ -66,6 +66,68 @@ An invalid payload cannot mutate anything: the request fails validation before i
 
 A token missing `Contents`, `Issues`, or `Pull requests` write is unusable for an agent: it cannot claim a branch, label an issue, or open a pull request, even though `git push` over SSH still works because push uses the SSH key, not the token.
 
+## When the host credential is shared with other work
+
+Not every host exists to run this project. If `gh` on a machine is also used for unrelated repositories, a token scoped to `gmedia/notnote` alone breaks that work. Forcing a single-repository token there is the wrong trade.
+
+`gh` needs very little for general use:
+
+| Scope      | Needed for                                    |
+| ---------- | --------------------------------------------- |
+| `repo`     | repositories, issues, pull requests, contents |
+| `read:org` | listing organisations and teams               |
+| `gist`     | `gh gist`                                     |
+| `workflow` | pushing changes to `.github/workflows/`       |
+
+`admin:public_key` is requested by `gh auth login` because it enables `gh ssh-key add`. Drop it unless you actually add keys through `gh` — you can manage keys in the browser instead.
+
+Everything else is not required for `gh` to work, and is dangerous on a token that an unattended agent can read out of a config file:
+
+| Scope                                                                                                                      | Why it is not worth keeping                |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `admin:org`, `admin:enterprise`                                                                                            | change organisation or enterprise settings |
+| `admin:org_hook`, `admin:repo_hook`                                                                                        | create webhooks that exfiltrate events     |
+| `admin:gpg_key`, `admin:ssh_signing_key`                                                                                   | add account-level keys                     |
+| `delete:packages`, `write:packages`                                                                                        | package deletion and publication           |
+| `audit_log`                                                                                                                | read the organisation audit log            |
+| `codespace`, `copilot`, `project`, `user`, `notifications`, `discount`, `write:discussion`, `write:network_configurations` | unrelated to repository work               |
+
+A trimmed classic token with `repo`, `read:org`, `gist`, and `workflow` is a reasonable middle ground: it still cannot do organisation or account damage if leaked, and it keeps working across repositories.
+
+### Declaring a deliberate choice
+
+The verifier accepts a classic token when the roster says it is expected, and accepts a residual risk when you name it and give a reason:
+
+```json
+{
+  "id": "alpha-1",
+  "host": "local",
+  "tokenClass": "classic",
+  "acceptedRisks": [
+    {
+      "rule": "ssh-key-write",
+      "reason": "shared general-purpose gh credential on this host; scopes tracked in #21"
+    }
+  ]
+}
+```
+
+- `tokenClass: "classic"` removes the `token-class` blocker and raises `classic-token` as a warning instead.
+- An accepted risk is downgraded to level `accepted`, rendered with `~` and its reason. It is never hidden.
+- An acceptance without a non-empty `reason` is rejected when the roster loads.
+- A result made only of accepted risks reports status `accepted`, which `--gate` allows. Any remaining warning or blocker still fails the gate, so acceptance cannot be used to silence an unrelated problem.
+
+Accept only what you cannot fix. `ssh-key-write` is unavoidable on a classic token that carries `admin:public_key`; `admin:ssh_signing_key` is not, because `gh` does not need it.
+
+### What scoping cannot fix, and what does
+
+If a host token is a person's general-purpose credential, the agent inherits that person's entire reach. No permission list changes that. Two options actually reduce the blast radius:
+
+1. **A separate machine identity.** Create a dedicated account for agents, grant it access to the repositories agents need, and issue its tokens. Revoking the agent does not disturb human work, and the audit trail finally distinguishes them. This is the only option that fixes attribution, which is currently impossible because all four hosts authenticate as the same account.
+2. **Deploy keys for git.** `git push` uses SSH, not the token. A per-host SSH deploy key with write access to `gmedia/notnote` only means that even a broad API token cannot be used to push to the other 55 repositories. The API token stays for `gh` work; the push path is repository-scoped.
+
+Option 2 is cheap and can be done today. Option 1 is the real fix and should be scheduled before external customers.
+
 ## Rotation order
 
 Rotating in the wrong order locks the agents out or leaves a window where the old credential is still live.

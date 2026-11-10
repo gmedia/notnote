@@ -10,6 +10,7 @@ import {
   parseProbe,
   renderTable,
   summarize,
+  validateAcceptance,
 } from './lib/credentials.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -71,6 +72,14 @@ function main(values) {
     process.exit(1);
   }
 
+  for (const agent of agents) {
+    const problems = validateAcceptance(agent.acceptedRisks);
+    if (problems.length > 0) {
+      process.stderr.write(`${agent.id ?? 'agent'}: ${problems.join('; ')}\n`);
+      process.exit(1);
+    }
+  }
+
   const probes = [];
   for (const agent of agents) {
     const raw = agent.host === 'local' ? probeLocal(repo) : probeRemote(agent.host, repo);
@@ -87,6 +96,7 @@ function main(values) {
         login: agent.login ?? config.login,
       },
       sharedKeys,
+      acceptedRisks: agent.acceptedRisks,
     }),
   );
 

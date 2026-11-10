@@ -10,7 +10,13 @@
     {
       "id": "beta-1",
       "host": "user@host-b",
-      "tokenClass": "fine-grained"
+      "tokenClass": "classic",
+      "acceptedRisks": [
+        {
+          "rule": "ssh-key-write",
+          "reason": "shared general-purpose gh credential on this host"
+        }
+      ]
     },
     {
       "id": "gamma-1",
