@@ -38,9 +38,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          LIVE_FLAG: ${{ vars.DISPATCH_LIVE }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            node scripts/dispatch.mjs --dry-run
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$INPUT_DRY_RUN" = "false" ]; then MODE=live; else MODE=dry-run; fi
           else
+            if [ "$LIVE_FLAG" = "true" ]; then MODE=live; else MODE=dry-run; fi
+          fi
+
+          echo "event=$EVENT_NAME mode=$MODE live_flag=${LIVE_FLAG:-unset}"
+
+          if [ "$MODE" = "live" ]; then
             node scripts/dispatch.mjs
+          else
+            node scripts/dispatch.mjs --dry-run
           fi

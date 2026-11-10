@@ -41,6 +41,25 @@ node scripts/dispatch.mjs --interval 120
 
 In CI, `.github/workflows/dispatch.yml` runs every ten minutes with `GITHUB_TOKEN`. Manual runs default to dry-run.
 
+## Scheduling and live mode
+
+The workflow runs every ten minutes, but **a scheduled run is dry-run by default**. It prints the plan and claims nothing.
+
+| Trigger                                  | Mode    | How to make it live                               |
+| ---------------------------------------- | ------- | ------------------------------------------------- |
+| `schedule`                               | dry-run | set repository variable `DISPATCH_LIVE` to `true` |
+| `workflow_dispatch`                      | dry-run | set the `dry_run` input to `false`                |
+| `workflow_dispatch` with `dry_run=false` | live    | —                                                 |
+
+Enable live scheduling only when the roster matches reality and every agent has a working credential, otherwise the dispatcher claims issues that no worker will pick up and each claim expires after an hour.
+
+```bash
+gh variable set DISPATCH_LIVE --body true  -R gmedia/notnote   # enable
+gh variable delete DISPATCH_LIVE           -R gmedia/notnote   # back to dry-run
+```
+
+The chosen mode is echoed in the job log as `event=... mode=... live_flag=...`, so a live run is visible rather than inferred.
+
 ## Inputs
 
 | Input        | Source                        | Notes                                                    |
