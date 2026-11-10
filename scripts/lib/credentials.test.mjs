@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  DANGEROUS_SCOPES,
   evaluateAgent,
   findSharedKeys,
   parseProbe,
   readAllowed,
+  readVerdict,
   summarize,
   tokenClass,
   truncatePrefix,
@@ -16,12 +18,16 @@ token_prefix=github_pat_11ABC
 token_fp=aaaaaaaaaaaa
 scopes=repo
 login=oppytut
-cap_metadata_read=200
+cap_traffic_read=200
+cap_traffic_read_anon=401
+cap_actions_read=200
+cap_actions_read_anon=200
 cap_contents_write=422
+cap_contents_write_anon=401
 cap_issues_write=422
 cap_pulls_write=422
-cap_actions_read=200
 cap_admin_read=403
+cap_ssh_key_write=403
 ssh_keys=SHA256:key-one
 transcript_hits=0
 history_hits=0
@@ -40,6 +46,11 @@ const probeOf = (overrides = {}) => {
       .join('\n'),
   );
 };
+
+const expected = { tokenClass: 'fine-grained', login: 'oppytut' };
+
+const run = (overrides = {}, sharedKeys = new Map()) =>
+  evaluateAgent({ agent: 'a', probe: probeOf(overrides), expected, sharedKeys });
 
 describe('tokenClass', () => {
   it('recognises each GitHub token family', () => {
@@ -78,14 +89,33 @@ describe('status helpers', () => {
   });
 });
 
+describe('readVerdict', () => {
+  it('marks a read inconclusive when anonymous matches', () => {
+    assert.equal(readVerdict(200, 200), 'inconclusive');
+  });
+
+  it('passes a read that only works with the token', () => {
+    assert.equal(readVerdict(200, 401), 'pass');
+  });
+
+  it('fails a read the token cannot perform', () => {
+    assert.equal(readVerdict(403, 401), 'fail');
+  });
+
+  it('passes when no anonymous baseline was collected', () => {
+    assert.equal(readVerdict(200, 0), 'pass');
+  });
+});
+
 describe('parseProbe', () => {
-  it('reads the probe payload and capabilities', () => {
+  it('reads capabilities and the anonymous baseline', () => {
     const probe = parseProbe(PROBE);
     assert.equal(probe.host, 'alpha-vm');
     assert.equal(probe.tokenPrefix, 'github_pat_…');
     assert.deepEqual(probe.scopes, ['repo']);
     assert.equal(probe.capabilities.contentsWrite, 422);
-    assert.equal(probe.capabilities.adminRead, 403);
+    assert.equal(probe.capabilities.contentsWriteAnon, 401);
+    assert.equal(probe.capabilities.sshKeyWrite, 403);
     assert.deepEqual(probe.sshKeys, ['SHA256:key-one']);
   });
 
@@ -110,135 +140,109 @@ describe('findSharedKeys', () => {
 });
 
 describe('evaluateAgent', () => {
-  const expected = { tokenClass: 'fine-grained', login: 'oppytut' };
-
-  it('passes a fully capable fine-grained token', () => {
-    const result = evaluateAgent({
-      agent: 'alpha-1',
-      probe: probeOf(),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.equal(result.status, 'pass');
+  it('passes a capable fine-grained token with meaningful probes', () => {
+    assert.equal(run().status, 'pass');
   });
 
   it('fails when contents write is missing', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ cap_contents_write: '403' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.equal(result.status, 'fail');
-    assert.ok(result.findings.some((finding) => finding.rule === 'contents-write'));
+    assert.ok(run({ cap_contents_write: '403' }).findings.some((f) => f.rule === 'contents-write'));
   });
 
   it('fails when issues write is missing', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ cap_issues_write: '403' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'issues-write'));
+    assert.ok(run({ cap_issues_write: '403' }).findings.some((f) => f.rule === 'issues-write'));
   });
 
   it('fails when pull request write is missing', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ cap_pulls_write: '403' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'pulls-write'));
+    assert.ok(run({ cap_pulls_write: '403' }).findings.some((f) => f.rule === 'pulls-write'));
   });
 
-  it('fails when metadata read is missing', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ cap_metadata_read: '404' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'metadata-read'));
+  it('fails when the token cannot push', () => {
+    assert.ok(run({ cap_traffic_read: '403' }).findings.some((f) => f.rule === 'repo-push'));
+  });
+
+  it('does not fail push when the probe is inconclusive', () => {
+    const result = run({ cap_traffic_read: '200', cap_traffic_read_anon: '200' });
+    assert.equal(result.status, 'pass');
+    assert.ok(result.findings.some((f) => f.level === 'inconclusive' && f.rule === 'repo-push'));
+  });
+
+  it('reports actions read as inconclusive on a public repository', () => {
+    const result = run({ cap_actions_read: '200', cap_actions_read_anon: '200' });
+    assert.ok(result.findings.some((f) => f.level === 'inconclusive' && f.rule === 'actions-read'));
+  });
+
+  it('does not report actions inconclusive when the baseline differs', () => {
+    const result = run({ cap_actions_read: '200', cap_actions_read_anon: '404' });
+    assert.equal(
+      result.findings.some((f) => f.rule === 'actions-read'),
+      false,
+    );
+  });
+
+  it('blocks a token that can write account SSH keys', () => {
+    const result = run({ cap_ssh_key_write: '422' });
+    assert.equal(result.status, 'fail');
+    assert.ok(result.findings.some((f) => f.rule === 'ssh-key-write'));
+  });
+
+  it('blocks a classic token with admin:public_key', () => {
+    const result = run({ token_prefix: 'ghp_ABC', scopes: 'repo, admin:public_key' });
+    assert.ok(result.findings.some((f) => f.rule === 'scope:admin:public_key'));
+  });
+
+  it('warns on other dangerous scopes', () => {
+    const result = run({ token_prefix: 'ghp_ABC', scopes: 'repo, admin:org, delete:packages' });
+    const broad = result.findings.find((f) => f.rule === 'broad-scope');
+    assert.ok(broad);
+    assert.match(broad.message, /admin:org/);
+    assert.match(broad.message, /delete:packages/);
+  });
+
+  it('covers enterprise and package scopes in the dangerous list', () => {
+    for (const scope of ['admin:enterprise', 'delete:packages', 'admin:ssh_signing_key']) {
+      assert.equal(DANGEROUS_SCOPES.has(scope), true, scope);
+    }
   });
 
   it('warns when administration is readable', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ cap_admin_read: '200' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.equal(result.status, 'warn');
-    assert.ok(result.findings.some((finding) => finding.rule === 'administration'));
+    const result = run({ cap_admin_read: '200' });
+    assert.ok(result.findings.some((f) => f.rule === 'administration'));
   });
 
   it('does not flag a 404 write probe as capable', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ cap_issues_write: '404' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.equal(result.status, 'fail');
+    assert.equal(run({ cap_issues_write: '404' }).status, 'fail');
   });
 
   it('fails an OAuth token', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ token_prefix: 'gho_ABC' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'token-class'));
+    assert.ok(run({ token_prefix: 'gho_ABC' }).findings.some((f) => f.rule === 'token-class'));
   });
 
   it('fails on an identity mismatch', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ login: 'someone-else' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'identity'));
+    assert.ok(run({ login: 'someone-else' }).findings.some((f) => f.rule === 'identity'));
   });
 
   it('fails when no credential is present', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ token_prefix: '', token_fp: '' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'no-credential'));
+    assert.ok(
+      run({ token_prefix: '', token_fp: '' }).findings.some((f) => f.rule === 'no-credential'),
+    );
   });
 
   it('warns when the SSH key is shared', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf(),
-      expected,
-      sharedKeys: new Map([['SHA256:key-one', ['alpha-vm', 'beta-vm']]]),
-    });
+    const result = run({}, new Map([['SHA256:key-one', ['alpha-vm', 'beta-vm']]]));
     assert.equal(result.status, 'warn');
-    assert.ok(result.findings.some((finding) => finding.rule === 'shared-ssh-key'));
   });
 
   it('blocks credentials in shell history', () => {
-    const result = evaluateAgent({
-      agent: 'a',
-      probe: probeOf({ history_hits: '2' }),
-      expected,
-      sharedKeys: new Map(),
-    });
-    assert.ok(result.findings.some((finding) => finding.rule === 'shell-history'));
+    assert.ok(run({ history_hits: '2' }).findings.some((f) => f.rule === 'shell-history'));
   });
 });
 
 describe('summarize', () => {
   it('counts statuses', () => {
-    const counts = summarize([{ status: 'pass' }, { status: 'warn' }, { status: 'fail' }]);
-    assert.deepEqual(counts, { pass: 1, warn: 1, fail: 1 });
+    assert.deepEqual(summarize([{ status: 'pass' }, { status: 'warn' }, { status: 'fail' }]), {
+      pass: 1,
+      warn: 1,
+      fail: 1,
+    });
   });
 });
