@@ -45,6 +45,27 @@ Repository access: **only** `gmedia/notnote`.
 
 Set an expiry. Ninety days is a reasonable default; rotate on schedule rather than after an incident.
 
+## Do not trust the repository `permissions` object
+
+`GET /repos/{owner}/{repo}` returns a `permissions` object with `admin`, `push`, and `maintain`. Those flags describe **the authenticated user's role in the organisation**, not what the token may do. An owner's read-only fine-grained token still reports `admin: true`.
+
+The same trap exists for `PATCH` on a non-existent issue or pull request: it returns `404 Not Found` even when the token has no write permission there, because the not-found check runs before authorisation.
+
+Verify capability by **acting**, with a payload that cannot succeed:
+
+| Capability          | Probe                                             | Authorised | Denied |
+| ------------------- | ------------------------------------------------- | ---------- | ------ |
+| Metadata read       | `GET /repos/{repo}`                               | 200        | 403    |
+| Contents write      | `POST /git/refs` with an invalid ref and zero SHA | 400/422    | 403    |
+| Issues write        | `POST /issues` with `{}`                          | 400/422    | 403    |
+| Pull requests write | `POST /pulls` with `{}`                           | 400/422    | 403    |
+| Actions read        | `GET /actions/workflows`                          | 200        | 403    |
+| Administration read | `GET /actions/permissions`                        | 200        | 403    |
+
+An invalid payload cannot mutate anything: the request fails validation before it is applied. Confirm with `GET /git/refs` before and after if you want proof.
+
+A token missing `Contents`, `Issues`, or `Pull requests` write is unusable for an agent: it cannot claim a branch, label an issue, or open a pull request, even though `git push` over SSH still works because push uses the SSH key, not the token.
+
 ## Rotation order
 
 Rotating in the wrong order locks the agents out or leaves a window where the old credential is still live.
@@ -109,16 +130,20 @@ node scripts/verify-tokens.mjs --map agents.local.json
 
 The verifier reports, per agent:
 
-| Signal                | Severity | Meaning                                             |
-| --------------------- | -------- | --------------------------------------------------- |
-| `token-class`         | blocker  | Token is OAuth or classic instead of fine-grained   |
-| `repo-push`           | blocker  | Token cannot push to the repository                 |
-| `identity`            | blocker  | Authenticated as the wrong account                  |
-| `shell-history`       | blocker  | Credential-like string found in shell history       |
-| `repo-admin`          | warning  | Token has admin on the repository                   |
-| `broad-scope`         | warning  | Token carries `admin:*`, `delete_repo`, or similar  |
-| `shared-ssh-key`      | warning  | The same SSH key is present on more than one host   |
-| `transcript-exposure` | warning  | Credential-like string found in session transcripts |
+| Signal                | Severity | Meaning                                                                        |
+| --------------------- | -------- | ------------------------------------------------------------------------------ |
+| `token-class`         | blocker  | Token is OAuth or classic instead of fine-grained                              |
+| `no-credential`       | blocker  | No token found on the host                                                     |
+| `metadata-read`       | blocker  | Token cannot read the repository at all                                        |
+| `contents-write`      | blocker  | Token cannot write contents; HTTPS push, branch deletion, and API commits fail |
+| `issues-write`        | blocker  | Token cannot claim, label, or comment                                          |
+| `pulls-write`         | blocker  | Token cannot open or update pull requests                                      |
+| `identity`            | blocker  | Authenticated as the wrong account                                             |
+| `shell-history`       | blocker  | Credential-like string found in shell history                                  |
+| `administration`      | warning  | Token can read repository administration                                       |
+| `broad-scope`         | warning  | Token carries `admin:*`, `delete_repo`, or similar                             |
+| `shared-ssh-key`      | warning  | The same SSH key is present on more than one host                              |
+| `transcript-exposure` | warning  | Credential-like string found in session transcripts                            |
 
 `--gate` exits non-zero on any warning or blocker, for use in CI or a pre-flight check. `--json` emits machine-readable output.
 
