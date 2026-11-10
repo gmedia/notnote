@@ -25,6 +25,29 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+function toStatus(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+export const CAPABILITY_KEYS = [
+  'metadataRead',
+  'contentsWrite',
+  'issuesWrite',
+  'pullsWrite',
+  'actionsRead',
+  'adminRead',
+];
+
+const FIELD_TO_KEY = {
+  cap_metadata_read: 'metadataRead',
+  cap_contents_write: 'contentsWrite',
+  cap_issues_write: 'issuesWrite',
+  cap_pulls_write: 'pullsWrite',
+  cap_actions_read: 'actionsRead',
+  cap_admin_read: 'adminRead',
+};
+
 export function parseProbe(stdout) {
   const fields = {};
   for (const line of String(stdout).split('\n')) {
@@ -33,18 +56,35 @@ export function parseProbe(stdout) {
     fields[line.slice(0, index).trim()] = line.slice(index + 1).trim();
   }
 
+  const capabilities = {};
+  for (const [field, key] of Object.entries(FIELD_TO_KEY)) {
+    capabilities[key] = toStatus(fields[field]);
+  }
+
   return {
     host: fields.host ?? 'unknown',
     tokenPrefix: truncatePrefix(fields.token_prefix ?? ''),
     tokenFp: fields.token_fp ?? '',
     scopes: splitList(fields.scopes),
     login: fields.login ?? '',
-    repoPush: fields.repo_push === 'true',
-    repoAdmin: fields.repo_admin === 'true',
+    capabilities,
     sshKeys: splitList(fields.ssh_keys),
     transcriptHits: Number(fields.transcript_hits ?? 0) || 0,
     historyHits: Number(fields.history_hits ?? 0) || 0,
   };
+}
+
+/**
+ * A write probe sends a deliberately invalid payload, so an authorized token
+ * receives a validation error instead of creating anything. 403 is the only
+ * status that means "this token lacks the permission".
+ */
+export function writeAllowed(status) {
+  return status === 400 || status === 422;
+}
+
+export function readAllowed(status) {
+  return status === 200;
 }
 
 export function findSharedKeys(probes) {
@@ -75,28 +115,61 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
   const findings = [];
   const klass = tokenClass(probe.tokenPrefix);
   const wanted = expected.tokenClass ?? 'fine-grained';
+  const caps = probe.capabilities;
+
+  if (probe.tokenFp === '' || probe.tokenPrefix === '') {
+    findings.push({
+      level: 'blocker',
+      rule: 'no-credential',
+      message: 'no token found on this host',
+    });
+  }
 
   if (klass !== wanted) {
     findings.push({
       level: 'blocker',
       rule: 'token-class',
-      message: `token is ${klass}, expected ${wanted}; account-wide OAuth tokens cannot be scoped to one repository`,
+      message: `token is ${klass}, expected ${wanted}; account-wide tokens cannot be scoped to one repository`,
     });
   }
 
-  if (!probe.repoPush) {
+  if (!readAllowed(caps.metadataRead)) {
     findings.push({
       level: 'blocker',
-      rule: 'repo-push',
-      message: 'token cannot push to the repository',
+      rule: 'metadata-read',
+      message: `cannot read repository metadata (status ${caps.metadataRead})`,
     });
   }
 
-  if (probe.repoAdmin) {
+  if (!writeAllowed(caps.contentsWrite)) {
+    findings.push({
+      level: 'blocker',
+      rule: 'contents-write',
+      message: `no contents write (status ${caps.contentsWrite}); HTTPS push, branch deletion, and API commits will fail`,
+    });
+  }
+
+  if (!writeAllowed(caps.issuesWrite)) {
+    findings.push({
+      level: 'blocker',
+      rule: 'issues-write',
+      message: `no issues write (status ${caps.issuesWrite}); claiming, labelling, and commenting will fail`,
+    });
+  }
+
+  if (!writeAllowed(caps.pullsWrite)) {
+    findings.push({
+      level: 'blocker',
+      rule: 'pulls-write',
+      message: `no pull requests write (status ${caps.pullsWrite}); the agent cannot open or update pull requests`,
+    });
+  }
+
+  if (readAllowed(caps.adminRead)) {
     findings.push({
       level: 'warning',
-      rule: 'repo-admin',
-      message: 'token has admin on the repository',
+      rule: 'administration',
+      message: 'token can read repository administration; agents do not need it',
     });
   }
 
