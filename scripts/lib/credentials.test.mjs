@@ -10,6 +10,7 @@ import {
   summarize,
   tokenClass,
   truncatePrefix,
+  validateAcceptance,
   writeAllowed,
 } from './credentials.mjs';
 
@@ -237,12 +238,88 @@ describe('evaluateAgent', () => {
   });
 });
 
+describe('expected classic tokens', () => {
+  it('treats a classic token as expected when the roster says so', () => {
+    const result = evaluateAgent({
+      agent: 'a',
+      probe: probeOf({ token_prefix: 'ghp_ABC' }),
+      expected: { tokenClass: 'classic', login: 'oppytut' },
+      sharedKeys: new Map(),
+    });
+    assert.equal(
+      result.findings.some((f) => f.rule === 'token-class'),
+      false,
+    );
+    assert.ok(result.findings.some((f) => f.rule === 'classic-token'));
+  });
+
+  it('still warns about the lack of repository scope', () => {
+    const result = evaluateAgent({
+      agent: 'a',
+      probe: probeOf({ token_prefix: 'ghp_ABC' }),
+      expected: { tokenClass: 'classic' },
+      sharedKeys: new Map(),
+      acceptedRisks: [{ rule: 'classic-token', reason: 'shared host credential' }],
+    });
+    assert.equal(result.status, 'accepted');
+  });
+});
+
+describe('acceptedRisks', () => {
+  it('downgrades a matching blocker and keeps the reason', () => {
+    const result = evaluateAgent({
+      agent: 'a',
+      probe: probeOf({ cap_ssh_key_write: '422' }),
+      expected,
+      sharedKeys: new Map(),
+      acceptedRisks: [{ rule: 'ssh-key-write', reason: 'general-purpose host credential' }],
+    });
+    const finding = result.findings.find((f) => f.rule === 'ssh-key-write');
+    assert.equal(finding.level, 'accepted');
+    assert.equal(finding.acceptedReason, 'general-purpose host credential');
+    assert.equal(result.status, 'accepted');
+  });
+
+  it('does not hide an unrelated blocker', () => {
+    const result = evaluateAgent({
+      agent: 'a',
+      probe: probeOf({ cap_issues_write: '403' }),
+      expected,
+      sharedKeys: new Map(),
+      acceptedRisks: [{ rule: 'ssh-key-write', reason: 'x' }],
+    });
+    assert.equal(result.status, 'fail');
+  });
+
+  it('rejects an acceptance without a reason', () => {
+    const problems = validateAcceptance([{ rule: 'ssh-key-write' }]);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /reason/);
+  });
+
+  it('rejects a non-array acceptance', () => {
+    assert.equal(validateAcceptance({ rule: 'x' }).length, 1);
+  });
+
+  it('accepts a well-formed list', () => {
+    assert.deepEqual(validateAcceptance([{ rule: 'x', reason: 'because' }]), []);
+  });
+
+  it('accepts undefined', () => {
+    assert.deepEqual(validateAcceptance(undefined), []);
+  });
+});
+
 describe('summarize', () => {
   it('counts statuses', () => {
-    assert.deepEqual(summarize([{ status: 'pass' }, { status: 'warn' }, { status: 'fail' }]), {
-      pass: 1,
-      warn: 1,
-      fail: 1,
-    });
+    assert.deepEqual(
+      summarize([
+        { status: 'pass' },
+        { status: 'accepted' },
+        { status: 'warn' },
+        { status: 'fail' },
+      ]),
+      { pass: 1, accepted: 1, warn: 1, fail: 1 },
+    );
   });
 });

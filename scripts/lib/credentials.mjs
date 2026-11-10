@@ -130,7 +130,36 @@ export function findSharedKeys(probes) {
   return shared;
 }
 
-export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
+function applyAcceptance(findings, acceptedRisks) {
+  if (!Array.isArray(acceptedRisks) || acceptedRisks.length === 0) return findings;
+  return findings.map((finding) => {
+    const match = acceptedRisks.find((risk) => risk.rule === finding.rule);
+    if (!match) return finding;
+    return { ...finding, level: 'accepted', acceptedReason: match.reason };
+  });
+}
+
+export function validateAcceptance(acceptedRisks) {
+  if (acceptedRisks === undefined) return [];
+  if (!Array.isArray(acceptedRisks)) return ['acceptedRisks must be an array'];
+  const problems = [];
+  for (const [index, risk] of acceptedRisks.entries()) {
+    const at = `acceptedRisks[${index}]`;
+    if (typeof risk !== 'object' || risk === null) {
+      problems.push(`${at} must be an object`);
+      continue;
+    }
+    if (typeof risk.rule !== 'string' || risk.rule === '') {
+      problems.push(`${at}.rule must be a non-empty string`);
+    }
+    if (typeof risk.reason !== 'string' || risk.reason.trim() === '') {
+      problems.push(`${at}.reason must be a non-empty string`);
+    }
+  }
+  return problems;
+}
+
+export function evaluateAgent({ agent, probe, expected, sharedKeys, acceptedRisks }) {
   const findings = [];
   const klass = tokenClass(probe.tokenPrefix);
   const wanted = expected.tokenClass ?? 'fine-grained';
@@ -148,7 +177,14 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
     findings.push({
       level: 'blocker',
       rule: 'token-class',
-      message: `token is ${klass}, expected ${wanted}; account-wide tokens cannot be scoped to one repository`,
+      message: `token is ${klass}, expected ${wanted}`,
+    });
+  } else if (klass === 'classic') {
+    findings.push({
+      level: 'warning',
+      rule: 'classic-token',
+      message:
+        'classic token has no repository scope; trim unused scopes and consider a separate machine identity',
     });
   }
 
@@ -269,25 +305,28 @@ export function evaluateAgent({ agent, probe, expected, sharedKeys }) {
     });
   }
 
-  const blocked = findings.some((finding) => finding.level === 'blocker');
-  const warned = findings.some((finding) => finding.level === 'warning');
+  const resolved = applyAcceptance(findings, acceptedRisks);
+  const blocked = resolved.some((finding) => finding.level === 'blocker');
+  const warned = resolved.some((finding) => finding.level === 'warning');
+  const accepted = resolved.some((finding) => finding.level === 'accepted');
   return {
     agent,
     host: probe.host,
-    status: blocked ? 'fail' : warned ? 'warn' : 'pass',
-    findings,
+    status: blocked ? 'fail' : warned ? 'warn' : accepted ? 'accepted' : 'pass',
+    findings: resolved,
   };
 }
 
 export function summarize(results) {
   return {
     pass: results.filter((result) => result.status === 'pass').length,
+    accepted: results.filter((result) => result.status === 'accepted').length,
     warn: results.filter((result) => result.status === 'warn').length,
     fail: results.filter((result) => result.status === 'fail').length,
   };
 }
 
-const MARKERS = { blocker: '✗', warning: '!', inconclusive: '?' };
+const MARKERS = { blocker: '✗', warning: '!', inconclusive: '?', accepted: '~' };
 
 export function renderTable(results) {
   const lines = [];
@@ -296,11 +335,14 @@ export function renderTable(results) {
       `${result.agent.padEnd(10)} ${result.host.padEnd(24)} ${result.status.toUpperCase()}`,
     );
     for (const finding of result.findings) {
-      lines.push(`  ${MARKERS[finding.level] ?? '-'} ${finding.rule}: ${finding.message}`);
+      const suffix = finding.acceptedReason ? ` (accepted: ${finding.acceptedReason})` : '';
+      lines.push(`  ${MARKERS[finding.level] ?? '-'} ${finding.rule}: ${finding.message}${suffix}`);
     }
   }
   const counts = summarize(results);
   lines.push('');
-  lines.push(`pass=${counts.pass} warn=${counts.warn} fail=${counts.fail}`);
+  lines.push(
+    `pass=${counts.pass} accepted=${counts.accepted} warn=${counts.warn} fail=${counts.fail}`,
+  );
   return lines.join('\n');
 }
